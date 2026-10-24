@@ -1,0 +1,19 @@
+
+
+[project]
+name = "langgraph-agent"
+version = "0.1.0"
+description = "A learning project for LangGraph agents"
+requires-python = ">=3.12"
+dependencies = [
+    "langchain-core>=1.6.12",
+    "langchain-ollama>=1.1.0",
+    "langgraph>=1.2.16",
+]
+
+[tool.uv]
+package = false
+
+[[tool.uv.index]]
+url = "https://pypi.mirrors.ustc.edu.cn/simple"
+default = true
