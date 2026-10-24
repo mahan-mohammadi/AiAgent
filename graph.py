@@ -53,7 +53,19 @@ TOOL_BY_NAME = {tool.name: tool for tool in TOOLS}
 MAX_STEPS = 10
 MAX_RETRIES = 2
 
-checkpointer = InMemorySaver()
+import sqlite3
+from langgraph.checkpoint.sqlite import SqliteSaver
+
+# Keep the connection alive for the lifetime of the application.
+_connection = sqlite3.connect(
+    "checkpoints.sqlite",
+    check_same_thread=False,
+)
+
+checkpointer = SqliteSaver(_connection)
+checkpointer.setup()
+
+
 llm = ChatOllama(
     model=MODEL_NAME,
     temperature=MODEL_TEMPERATURE,
