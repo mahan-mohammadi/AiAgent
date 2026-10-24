@@ -1,4 +1,5 @@
 from memory import search_memory, get_all_memories
+from langgraph.checkpoint.memory import InMemorySaver
 import json
 
 from langchain_core.messages import SystemMessage, HumanMessage
@@ -52,6 +53,7 @@ TOOL_BY_NAME = {tool.name: tool for tool in TOOLS}
 MAX_STEPS = 10
 MAX_RETRIES = 2
 
+checkpointer = InMemorySaver()
 llm = ChatOllama(
     model=MODEL_NAME,
     temperature=MODEL_TEMPERATURE,
@@ -69,6 +71,42 @@ def get_user_request(state: AgentState) -> str:
 
     raise ValueError("No user message found")
 
+
+def get_conversation_history(state: AgentState, limit: int = 10) -> str:
+    """Format recent conversation messages before the current request."""
+    messages = state.get("messages", [])
+
+    # Find the latest user message to separate earlier turns
+    last_user_index = None
+    for i in range(len(messages) - 1, -1, -1):
+        if messages[i].type == "human":
+            last_user_index = i
+            break
+
+    if last_user_index is None:
+        return "No previous conversation."
+
+    previous_messages = [
+        message
+        for message in messages[:last_user_index]
+        if message.type in ("human", "ai")
+        and isinstance(message.content, str)
+        and message.content.strip()
+        and not getattr(message , "tool_calls" , None)
+    ]
+
+    previous_messages = previous_messages[-limit:]
+
+    if not previous_messages:
+        return "No previous conversation."
+
+    return "\n".join(
+        f"{'User' if message.type == 'human' else 'Assistant'}: "
+        f"{message.content}"
+        for message in previous_messages
+    )
+
+
 def retrieve_memories(state: AgentState):
     """Retrieve memories relevant to the current request."""
     user_request = get_user_request(state)
@@ -84,8 +122,10 @@ def retrieve_memories(state: AgentState):
 def planner(state: AgentState):
     """Create an ordered plan from the user's request."""
     memories = state.get("memories", [])
-
+    history = get_conversation_history(state)
     context = f"""
+    Previous conversation:
+    {history}
     User request:
     {get_user_request(state)}
 
@@ -233,9 +273,11 @@ def executor(state: AgentState):
                 ],
                 "results": state["results"] + [str(result)],
             }
+    history = get_conversation_history(state)
     context = f"""
     Your ONLY task is to execute this single step.
-
+    Previous conversation:
+    {history}
     Step: {current_step["description"]}
     Required tool: {tool_name}
 
@@ -252,6 +294,7 @@ def executor(state: AgentState):
     - If the step asks about saved memory, answer using the actual memory values above.
     - Never claim that a memory contains a value without stating that value.
     - Call the required tool exactly once.
+    - Use previous conversation to resolve references in the current request.
     - For calculator, provide the numbers and operation.
     - For convert_units, provide value, category, from_unit, and to_unit.
     """
@@ -420,17 +463,23 @@ def evaluator(state: AgentState):
         "last_error": "",
     }
 
+
 def finalize(state: AgentState):
     """Combine the step results into one answer for the user."""
+    history = get_conversation_history(state)
+
     context = f"""
-User request:
+Previous conversation:
+{history}
+
+Current user request:
 {get_user_request(state)}
 
 Results from the plan:
 {json.dumps(state["results"], ensure_ascii=False)}
 
-Answer the user's original request using these results.
-Be concise. Do not invent missing information.
+Answer the current request using these results and the conversation
+history when relevant. Be concise. Do not invent missing information.
 """
 
     response = llm.invoke([
@@ -442,12 +491,6 @@ Be concise. Do not invent missing information.
         "messages": [response],
         "final_answer": response.content,
     }
-
-
-
-
-
-
 
 
 def route_executor(state: AgentState):
@@ -520,4 +563,4 @@ def build_graph():
 
     builder.add_edge("finalize", END)
 
-    return builder.compile()
+    return builder.compile(checkpointer=checkpointer)

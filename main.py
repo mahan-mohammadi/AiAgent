@@ -21,7 +21,10 @@ def main():
                     {"role": "user", "content": user_input}
                 ]
             },
-            config={"recursion_limit": 25},
+            config={"recursion_limit": 25,
+            
+            "configurable": {"thread_id": "current_session"},
+            },
         )
 
         for message in result["messages"]:
