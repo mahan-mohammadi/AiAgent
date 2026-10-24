@@ -50,6 +50,7 @@ with st.sidebar:
         st.session_state.thread_id = None
         st.session_state.messages = []
         st.session_state.trace = None
+        st.session_state.conversation_created = False
         st.rerun()
     st.divider()
     st.caption("Model: local Ollama")
@@ -67,6 +68,8 @@ with st.sidebar:
             if st.button(title, key=f"chat_{thread_id}"):
                 st.session_state.thread_id = thread_id
                 st.session_state.messages = load_messages(thread_id)
+
+                st.session_state.conversation_created = True
                 st.session_state.trace = None
                 st.rerun()
 # Display conversation history.
@@ -79,14 +82,16 @@ for message in st.session_state.messages:
 prompt = st.chat_input("Ask your agent something...")
 
 if prompt:
-    # Save and display the user's message immediately.
+    if not st.session_state.conversation_created:
+        st.session_state.thread_id = str(uuid.uuid4())
+        create_conversation(st.session_state.thread_id)
+        st.session_state.conversation_created = True
+
     st.session_state.messages.append(
         {"role": "user", "content": prompt}
     )
-    
 
-    save_message(st.session_state.thread_id , "user" , prompt)
-
+    save_message(st.session_state.thread_id, "user", prompt)
     with st.chat_message("user"):
         st.markdown(prompt)
 
