@@ -1,4 +1,5 @@
 
+
 from tools.calculator import calculator
 from tools.datetime_tools import (
     get_current_time,
@@ -7,6 +8,7 @@ from tools.datetime_tools import (
 )
 from tools.text_tools import count_words, reverse_text, find_text
 from tools.unit_tools import convert_units
+from tools.memory_tools import remember_fact
 
 __all__ = [
     "calculator",
@@ -17,4 +19,5 @@ __all__ = [
     "reverse_text",
     "find_text",
     "convert_units",
+    "remember_fact",
 ]
