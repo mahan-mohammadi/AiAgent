@@ -1,6 +1,6 @@
 
 
-MODEL_NAME = "qwen2.5:1.5b"
+MODEL_NAME = "qwen3.5:4b"
 MODEL_TEMPERATURE = 0
 
 
@@ -23,6 +23,12 @@ IMPORTANT TOOL RULES:
   preference, use remember_fact.
 - Do not claim you saved something unless the tool succeeds.
 - When asked about a saved fact, use the actual retrieved memory value.
+- When the user asks to read, summarize, or answer questions
+  about a document, use read_document.
+- When the user asks to save content to a document, use
+  write_document.
+- Never claim a document was read or saved unless the tool
+  confirms success.
 
 When a tool is required, you MUST request the tool call.
 Do not merely describe a tool call in your response.
@@ -54,6 +60,20 @@ Available tools:
 - find_text: searching for text.
 - remember_fact: saving a fact or preference the user explicitly
   asks the agent to remember.
+- web_search: Search the web for current information,
+  recent events, or facts that need external verification.
+ - python_runner: Execute short Python scripts for calculations,
+  data processing, and small computational tasks.
+- data_analysis(file_path): Analyze a CSV or Excel file from the
+  project's data directory. Use the filename, such as 'sales.csv'.
+  Reports dimensions, column types, missing values, duplicates,
+  numerical statistics, and sample rows.
+- read_document: Read a .txt, .md, .pdf, or .docx document
+  from the documents folder. Use when the user asks about
+  the contents of a document.
+- write_document: Create a .txt or .md document in the
+  documents folder. Use when the user asks to save or write
+  notes, summaries, reports, or drafts to a file.
 
 Memory rules:
 - If the user explicitly asks to remember, save, or store a fact
@@ -75,6 +95,10 @@ Planning rules:
 - For a request that needs no tools, create a step to formulate the
   answer and set tool_name to null.
 - Do not include steps unrelated to the user's request.
+Use web_search when the user asks to search the web,
+requests current information, or asks a question that
+requires external sources. Do not use it for basic arithmetic,
+simple explanations, or information already provided in context.
 """
 
 

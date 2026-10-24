@@ -1,5 +1,8 @@
-
-
+from .python_runner import python_runner
+from .data_analysis import data_analysis
+from .document_reader import read_document
+from .document_writer import write_document
+from .web_search import web_search
 from tools.calculator import calculator
 from tools.datetime_tools import (
     get_current_time,

@@ -1,0 +1,2 @@
+LangGraph is a framework for building stateful agent workflows.
+My agent uses a planner, executor, and evaluator.

@@ -24,6 +24,11 @@ from tools import (
     find_text,
     convert_units,
     remember_fact,
+    web_search,
+    python_runner,
+    data_analysis,
+    read_document,
+    write_document
 )
 
 
@@ -37,6 +42,11 @@ TOOLS = [
     find_text,
     convert_units,
     remember_fact,
+    web_search,
+    python_runner,
+    data_analysis,
+    read_document,
+    write_document
 ]
 TOOL_BY_NAME = {tool.name: tool for tool in TOOLS}
 MAX_STEPS = 10
@@ -46,6 +56,7 @@ llm = ChatOllama(
     model=MODEL_NAME,
     temperature=MODEL_TEMPERATURE,
     #num_ctx=8192,
+    reasoning=False,
 )
 
 
