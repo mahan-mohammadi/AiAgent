@@ -1,5 +1,6 @@
 
 
+import re
 import sqlite3
 from pathlib import Path
 
@@ -52,9 +53,48 @@ def save_memory(key: str, value: str) -> str:
 
     return f"Saved memory: {key} = {value}"
 
-def search_memory(query: str) -> list[dict]:
-    """Find memories whose key or value contains the query."""
-    terms = query.strip().split()
+STOPWORDS = {
+    "the", "and", "for", "are", "was", "were", "you", "your", "what",
+    "when", "where", "which", "who", "how", "why", "can", "could",
+    "would", "should", "does", "did", "has", "have", "had", "not",
+    "but", "with", "from", "that", "this", "these", "those", "about",
+    "into", "than", "then", "them", "they", "their", "there", "here",
+    "tell", "please", "some", "any", "all", "out", "get", "got", "let",
+    "its", "our", "his", "her", "him", "she", "too", "also", "just",
+}
+
+# Phrases that mean "show me what you have saved", where listing recent
+# memories is useful even when no keyword matches.
+RECALL_HINTS = (
+    "do you remember", "what do you remember", "did i tell you",
+    "what do you know", "know about me", "saved", "memories", "memory",
+)
+
+
+def asks_about_memory(request: str) -> bool:
+    """True if the request is asking what the agent has saved."""
+    lowered = request.lower()
+    return any(hint in lowered for hint in RECALL_HINTS)
+
+
+def extract_terms(query: str) -> list[str]:
+    """Meaningful search words: no stopwords, nothing under 3 letters."""
+    terms: list[str] = []
+    for word in re.findall(r"\w+", query.lower()):
+        if len(word) >= 3 and word not in STOPWORDS and word not in terms:
+            terms.append(word)
+    return terms
+
+
+def _like_pattern(term: str) -> str:
+    """Escape LIKE wildcards so '_' and '%' match literally."""
+    escaped = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
+def search_memory(query: str, limit: int = 10) -> list[dict]:
+    """Find memories matching any meaningful word, best matches first."""
+    terms = extract_terms(query)
 
     if not terms:
         return []
@@ -63,21 +103,25 @@ def search_memory(query: str) -> list[dict]:
     parameters = []
 
     for term in terms:
-        conditions.append("(key LIKE ? OR value LIKE ?)")
-        pattern = f"%{term}%"
+        conditions.append("(key LIKE ? ESCAPE '\\' OR value LIKE ? ESCAPE '\\')")
+        pattern = _like_pattern(term)
         parameters.extend([pattern, pattern])
 
     sql = (
         "SELECT id, key, value, created_at FROM memories WHERE "
         + " OR ".join(conditions)
-        + " ORDER BY id DESC LIMIT 10"
     )
 
     with sqlite3.connect(DB_PATH) as conn:
         conn.row_factory = sqlite3.Row
-        rows = conn.execute(sql, parameters).fetchall()
+        rows = [dict(row) for row in conn.execute(sql, parameters).fetchall()]
 
-    return [dict(row) for row in rows]
+    def score(row: dict) -> int:
+        text = f"{row['key']} {row['value']}".lower()
+        return sum(term in text for term in terms)
+
+    rows.sort(key=lambda row: (score(row), row["id"]), reverse=True)
+    return rows[:limit]
 
 
 def get_all_memories() -> list[dict]:

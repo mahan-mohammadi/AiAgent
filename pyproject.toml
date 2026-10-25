@@ -24,3 +24,7 @@ package = false
 [[tool.uv.index]]
 url = "https://pypi.mirrors.ustc.edu.cn/simple"
 default = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

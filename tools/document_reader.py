@@ -13,6 +13,7 @@ DOCUMENTS_DIR = (
 
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
 SUPPORTED_EXTENSIONS = {".txt", ".md", ".pdf", ".docx"}
+MAX_OUTPUT_CHARS = 12000  # what read_document returns to the model
 
 
 def resolve_document(filename: str) -> Path:
@@ -30,6 +31,34 @@ def resolve_document(filename: str) -> Path:
         raise ValueError("Access outside documents/ is not allowed.")
 
     return path
+
+
+def load_text(path: Path) -> str:
+    """Extract the full plain text of a supported document.
+
+    No size limit is applied here. Callers decide what to do with it:
+    read_document truncates it, a RAG indexer would split it into chunks.
+    """
+    suffix = path.suffix.lower()
+
+    if suffix in {".txt", ".md"}:
+        return path.read_text(encoding="utf-8")
+
+    if suffix == ".docx":
+        doc = Document(path)
+        content = "\n".join(paragraph.text for paragraph in doc.paragraphs)
+
+        for table in doc.tables:
+            for row in table.rows:
+                content += "\n" + " | ".join(cell.text for cell in row.cells)
+
+        return content
+
+    if suffix == ".pdf":
+        pdf = PdfReader(str(path))
+        return "\n".join(page.extract_text() or "" for page in pdf.pages)
+
+    raise ValueError(f"Unsupported file type: {suffix or '(none)'}")
 
 
 @tool
@@ -50,36 +79,14 @@ def read_document(filename: str) -> str:
         if path.stat().st_size > MAX_FILE_SIZE:
             return "Error: document exceeds the 10 MB limit."
 
-        suffix = path.suffix.lower()
-
-        if suffix in {".txt", ".md"}:
-            content = path.read_text(encoding="utf-8")
-
-        elif suffix == ".docx":
-            doc = Document(path)
-            content = "\n".join(
-                paragraph.text for paragraph in doc.paragraphs
-            )
-
-            for table in doc.tables:
-                for row in table.rows:
-                    content += "\n" + " | ".join(
-                        cell.text for cell in row.cells
-                    )
-
-        else:  # PDF
-            pdf = PdfReader(str(path))
-            content = "\n".join(
-                page.extract_text() or "" for page in pdf.pages
-            )
+        content = load_text(path)
 
         if not content.strip():
             return "The document contains no extractable text."
 
         # Keep tool output bounded for the model's context window.
-        max_chars = 12000
-        if len(content) > max_chars:
-            content = content[:max_chars] + "\n\n[Content truncated.]"
+        if len(content) > MAX_OUTPUT_CHARS:
+            content = content[:MAX_OUTPUT_CHARS] + "\n\n[Content truncated.]"
 
         return f"Document: {path.name}\n\n{content}"
 

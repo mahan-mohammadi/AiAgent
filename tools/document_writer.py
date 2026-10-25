@@ -35,9 +35,11 @@ def write_document(
 
         path.write_text(content, encoding="utf-8")
 
+        relative = path.relative_to(resolve_document("."))
+
         return (
             f"Successfully wrote {len(content)} characters "
-            f"to documents/{path.relative_to(path.parents[1])}."
+            f"to documents/{relative.as_posix()}."
         )
 
     except Exception as exc:

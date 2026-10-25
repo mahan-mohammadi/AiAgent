@@ -1,4 +1,5 @@
-from memory import search_memory, get_all_memories
+from memory import search_memory, get_all_memories, asks_about_memory
+from plan_utils import parse_plan, fallback_plan
 from langgraph.checkpoint.memory import InMemorySaver
 import json
 
@@ -52,6 +53,7 @@ TOOLS = [
 TOOL_BY_NAME = {tool.name: tool for tool in TOOLS}
 MAX_STEPS = 10
 MAX_RETRIES = 2
+PLANNER_ATTEMPTS = 2  # initial try + one retry with the error fed back
 
 import sqlite3
 from langgraph.checkpoint.sqlite import SqliteSaver
@@ -124,9 +126,11 @@ def retrieve_memories(state: AgentState):
     user_request = get_user_request(state)
     memories = search_memory(user_request)
 
-    if not memories:
-        print("[Memory] No keyword matches; using recent memories.")
-        memories = get_all_memories()[:5]
+    # Only fall back to "latest memories" when the user is explicitly
+    # asking what is saved. Otherwise unrelated facts just add noise.
+    if not memories and asks_about_memory(user_request):
+        print("[Memory] No keyword matches; listing latest memories.")
+        memories = list(reversed(get_all_memories()[-5:]))  # newest first
 
     print("[Memory] Retrieved:", memories)
     return {"memories": memories}
@@ -154,37 +158,34 @@ def planner(state: AgentState):
         HumanMessage(content=context),
     ]
 
-    response = llm.invoke(messages)
-    content = response.content.strip()
+    plan = None
+    last_error = ""
 
-    # Handle JSON wrapped in Markdown code fences.
-    if content.startswith("```"):
-        content = content.split("\n", 1)[-1]
-        if content.endswith("```"):
-            content = content[:-3].strip()
+    for attempt in range(1, PLANNER_ATTEMPTS + 1):
+        attempt_messages = list(messages)
 
+        if last_error:
+            attempt_messages.append(HumanMessage(content=(
+                f"Your previous answer was rejected: {last_error}\n"
+                'Return ONLY a valid JSON object like {"plan": [...]}.'
+            )))
 
+        response = llm.invoke(attempt_messages)
 
-    data = json.loads(content)
+        try:
+            plan = parse_plan(response.content, set(TOOL_BY_NAME))
+            break
+        except ValueError as exc:
+            last_error = str(exc)
+            print(
+                f"[Planner] Attempt {attempt}/{PLANNER_ATTEMPTS} "
+                f"failed: {last_error}",
+                flush=True,
+            )
 
-# Accept either {"plan": [...]} or a direct [...]
-    if isinstance(data, list):
-        plan = data
-    elif isinstance(data, dict):
-        plan = data.get("plan")
-    else:
-        raise ValueError(
-            f"Planner returned an unexpected JSON type: {type(data).__name__}"
-        )
-
-
-
-    if not isinstance(plan, list) or not plan:
-        raise ValueError("Planner returned an empty or invalid plan")
-
-
-
-
+    if plan is None:
+        print("[Planner] Using fallback plan (direct answer).", flush=True)
+        plan = fallback_plan()
 
     # Correct memory-tool selection for explicit save requests only.
     request = get_user_request(state).strip().lower()
@@ -206,23 +207,6 @@ def planner(state: AgentState):
         # Recall questions must not invoke the saving tool.
         plan[0]["tool_name"] = None
 
-    for step in plan:
-        if (
-            not isinstance(step, dict)
-            or not isinstance(step.get("description"), str)
-            or not step["description"].strip()
-        ):
-            raise ValueError("Each plan step needs a description")
-
-        step["status"] = "pending"
-        step.pop("result", None)
-        if "tool_name" not in step:
-            raise ValueError("Each plan step needs a tool_name field")
-
-        tool_name = step["tool_name"]
-
-        if tool_name is not None and tool_name not in TOOL_BY_NAME:
-            raise ValueError(f"Unknown tool assigned by planner: {tool_name}")
     print("[Plan]", plan)
     return {
         "plan": plan,
@@ -236,6 +220,70 @@ def planner(state: AgentState):
 
 
 
+
+
+def build_step_context(state: AgentState, step: dict, tool_name) -> str:
+    """Build the prompt for executing one plan step.
+
+    The model must see the original request and the results of earlier
+    steps, because a step like "count the words in the summary" has
+    nothing to work on otherwise.
+    """
+    parts = [
+        "Execute ONLY the step below.",
+        f"Original user request (for reference): {get_user_request(state)}",
+        f"Step to execute: {step['description']}",
+    ]
+
+    history = get_conversation_history(state)
+    if history != "No previous conversation.":
+        parts.append(f"Previous conversation:\n{history}")
+
+    results = state.get("results", [])
+    if results:
+        numbered = "\n".join(f"{i}. {r}" for i, r in enumerate(results, 1))
+        parts.append(
+            "Results of earlier steps (use them as the input for this "
+            "step whenever the step refers to them):\n" + numbered
+        )
+
+    memories = state.get("memories", [])
+    if memories:
+        parts.append(
+            "Saved memories (use only if the step is about the user's "
+            "saved information):\n"
+            + json.dumps(memories, ensure_ascii=False, default=str)
+        )
+
+    if state.get("last_error"):
+        parts.append(
+            f"Your previous attempt failed: {state['last_error']}\n"
+            "Do not repeat the same mistake."
+        )
+
+    if tool_name is None:
+        parts.append(
+            "Rules:\n"
+            "- Do not call any tool.\n"
+            "- Reply with ONLY the output of this step, following any "
+            "format the step asks for (for example, a single sentence).\n"
+            "- No introduction, no bullet lists unless asked, and no "
+            "follow-up questions."
+        )
+    else:
+        parts.append(
+            "Rules:\n"
+            f"- Call the tool `{tool_name}` exactly once.\n"
+            "- Fill every argument with real values taken from the step, "
+            "the request, or the earlier results. Never leave arguments "
+            "empty.\n"
+            "- Do not calculate or convert anything yourself.\n"
+            "- For calculator, provide the numbers and operation.\n"
+            "- For convert_units, provide value, category, from_unit, "
+            "and to_unit."
+        )
+
+    return "\n\n".join(parts)
 
 
 def executor(state: AgentState):
@@ -285,34 +333,14 @@ def executor(state: AgentState):
                 ],
                 "results": state["results"] + [str(result)],
             }
-    history = get_conversation_history(state)
-    context = f"""
-    Your ONLY task is to execute this single step.
-    Previous conversation:
-    {history}
-    Step: {current_step["description"]}
-    Required tool: {tool_name}
-
-    Previous step results (for context only):
-    {state["results"]}
-
-    Relevant saved memories:
-    {json.dumps(state.get("memories", []), ensure_ascii=False, default=str)}
-
-    Rules:
-    - Do not answer the user's original request.
-    - Do not calculate or convert anything yourself.
-    - Do not discuss previous results.
-    - If the step asks about saved memory, answer using the actual memory values above.
-    - Never claim that a memory contains a value without stating that value.
-    - Call the required tool exactly once.
-    - Use previous conversation to resolve references in the current request.
-    - For calculator, provide the numbers and operation.
-    - For convert_units, provide value, category, from_unit, and to_unit.
-    """
+    context = build_step_context(state, current_step, tool_name)
     # Build a fresh context instead of resending the entire conversation.
+    system_prompt = EXECUTOR_PROMPT
+    if tool_name is not None:
+        system_prompt += "\n\n" + SYSTEM_PROMPT
+
     messages = [
-        SystemMessage(content=EXECUTOR_PROMPT + "\n\n" + SYSTEM_PROMPT),
+        SystemMessage(content=system_prompt),
         HumanMessage(content=context),
     ]
 
